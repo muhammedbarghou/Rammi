@@ -3,6 +3,7 @@ import { canAdd, checkCombo, fits } from "./combos";
 
 export const OPENING_MIN = 71;
 export const TURN_SECONDS = 15;
+export const MAX_MISSED_TURNS = 3;
 
 /** Thrown for any illegal action. `rule` is the PRD rule id it breaks (or "TURN"/"CARD"). */
 export class RuleError extends Error {
@@ -104,7 +105,9 @@ export type Move =
   | { kind: "layDown"; combos: string[][] }
   | { kind: "add"; comboId: string; cardIds: string[]; side: "start" | "end" }
   | { kind: "swapJoker"; comboId: string; cardId: string }
-  | { kind: "discard"; cardId: string };
+  | { kind: "discard"; cardId: string }
+  /** Sent by the server when the turn timer runs out (R-25). */
+  | { kind: "timeout" };
 
 /** R-18: a card that fits the next player's combinations cannot be discarded. */
 export function canDiscard(s: RoundState, seat: number, card: Card): boolean {
@@ -198,8 +201,34 @@ export function applyMove(prev: RoundState, seat: number, move: Move): RoundStat
       finishTurn(s, p, card);
       break;
     }
+
+    case "timeout": {
+      if (++p.missedTurns >= MAX_MISSED_TURNS) {
+        forfeit(s, p); // R-26
+        break;
+      }
+      // R-25: draw if needed, then discard the newest card that R-18 allows.
+      if (s.phase === "draw") {
+        drawFromPile(s, p);
+        s.turn.drew = "pile";
+      }
+      finishTurn(s, p, [...p.hand].reverse().find((c) => canDiscard(s, seat, c)) ?? p.hand.at(-1)!);
+      break;
+    }
   }
   return s;
+}
+
+/** R-26: the player leaves; if one player or team is left, they win. */
+function forfeit(s: RoundState, p: Player) {
+  p.forfeited = true;
+  const left = s.players.filter((q) => !q.forfeited);
+  if (new Set(left.map((q) => (s.companion ? q.seat % 2 : q.seat))).size === 1) {
+    s.phase = "over";
+    s.winner = left[0]!.seat;
+    return;
+  }
+  advance(s, p.seat);
 }
 
 function expectPhase(s: RoundState, phase: RoundState["phase"]) {
@@ -283,12 +312,16 @@ function finishTurn(s: RoundState, p: Player, card: Card) {
     s.winner = p.seat;
     return;
   }
+  advance(s, p.seat);
+}
+
+function advance(s: RoundState, seat: number) {
   // R-03a: once everyone has had a turn, the first discard goes under the discard pile.
   if (s.firstDiscard && s.players.every((q) => q.forfeited || q.turnsTaken > 0)) {
     s.discardPile.unshift(s.firstDiscard);
     s.firstDiscard = null;
   }
-  s.activeSeat = nextSeat(s, p.seat);
+  s.activeSeat = nextSeat(s, seat);
   s.phase = "draw";
   s.turn = newTurn();
 }
