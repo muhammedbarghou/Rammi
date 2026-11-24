@@ -1,3 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+allowBuilds:
+  esbuild: true
+  # optional native speed-up for msgpackr; the pure JS fallback is fine
+  msgpackr-extract: false
