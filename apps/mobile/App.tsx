@@ -1,6 +1,7 @@
 import type { Room } from "@colyseus/sdk";
 import type { Move } from "@rami/rules";
 import type { Session } from "@supabase/supabase-js";
+import { Inter_400Regular, Inter_600SemiBold, Inter_700Bold, useFonts } from "@expo-google-fonts/inter";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -10,7 +11,7 @@ import { Home } from "./src/Home";
 import { Lobby } from "./src/Lobby";
 import { SignIn } from "./src/SignIn";
 import { supabase } from "./src/supabase";
-import { GREEN } from "./src/ui";
+import { C } from "./src/ui";
 import { Table } from "./src/Table";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -25,6 +26,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [fontsLoaded, fontError] = useFonts({ Inter_400Regular, Inter_600SemiBold, Inter_700Bold });
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -61,7 +63,7 @@ export default function App() {
   const move = (m: Move) => room && sendMove(room, m);
 
   let screen;
-  if (session === undefined) screen = null;
+  if (session === undefined || (!fontsLoaded && !fontError)) screen = null;
   else if (!session) screen = <SignIn />;
   else if (!room || !view) screen = <Home session={session} busy={busy || !!room} error={error} onCreate={(o) => open({ create: o })} onJoin={(code) => open({ code })} />;
   else if (view.view.status === "lobby") screen = <Lobby view={view.view} onLeave={leave} />;
@@ -71,7 +73,7 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar hidden />
       {/* Android draws edge to edge, so keep content clear of the nav bar and any notch. */}
-      <SafeAreaView style={{ flex: 1, backgroundColor: GREEN }}>{screen}</SafeAreaView>
+      <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>{screen}</SafeAreaView>
     </GestureHandlerRootView>
   );
 }

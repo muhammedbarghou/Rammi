@@ -1,68 +1,42 @@
 import { canAdd, checkCombo, RANKS, SUITS, type Card, type Combination, type Move } from "@rami/rules";
+import { ArrowDownToLine, ArrowDownUp, Layers, ListOrdered, Loader, Menu, Wifi, WifiOff, Check } from "lucide-react-native";
 import { type ComponentRef, type ReactNode, useEffect, useRef, useState } from "react";
-import { Image, Pressable, StyleSheet, Text, View as RNView } from "react-native";
-import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
-import Animated, { FadeInDown, FadeOut, LinearTransition, useAnimatedStyle, useSharedValue, withSpring, withTiming, ZoomIn } from "react-native-reanimated";
-import { scheduleOnRN } from "react-native-worklets";
-import { CARD_IMAGES } from "./cardImages";
+import { Pressable, StyleSheet, Text, View as RNView } from "react-native";
+import Animated, { FadeIn, FadeOut, ZoomIn } from "react-native-reanimated";
+import Svg, { Defs, RadialGradient, Rect, Stop } from "react-native-svg";
 import type { View } from "./game";
-import { GREEN } from "./ui";
+import { CardFace, CardStack, HandCard } from "./table/Card";
+import { Seat } from "./table/Seat";
+import { Button, FinalResult, GameMenu, RoundResult, Scoreboard, type Unit } from "./table/Sheets";
+import { C, F } from "./ui";
 
 type Props = { view: View; receivedAt: number; notice: string; dropped: boolean; onMove: (m: Move) => void; onLeave: () => void };
 
-const sortKey = (c: Card) => (c.suit ? SUITS.indexOf(c.suit) * 20 + RANKS.indexOf(c.rank as (typeof RANKS)[number]) : 99);
+const rankIndex = (c: Card) => (c.suit ? RANKS.indexOf(c.rank as (typeof RANKS)[number]) : 99);
+const bySuit = (c: Card) => (c.suit ? SUITS.indexOf(c.suit) * 20 + rankIndex(c) : 999);
+const byRank = (c: Card) => (c.suit ? rankIndex(c) * 4 + SUITS.indexOf(c.suit) : 999);
 
-/** The PNGs are 64x64 with the card at x 11..53, y 2..62, so the frame crops to that 42x60 face. Card ids are `${deck}${rank}${suit}`. */
-function CardFace({ card, small, selected, onPress, children }: { card: Card | null; small?: boolean; selected?: boolean; onPress?: () => void; children?: ReactNode }) {
-  const s = small ? 0.55 : 1;
+/** Dark felt, lighter toward the centre. */
+function Felt() {
   return (
-    <Pressable onPress={onPress} disabled={!onPress} style={[styles.card, { width: 42 * s, height: 60 * s }, small && styles.cardSmall, selected && styles.selected]}>
-      <Image source={CARD_IMAGES[card ? card.id.slice(1) : "back"]} style={{ width: 64 * s, height: 64 * s, marginLeft: -11 * s, marginTop: -2 * s }} />
-      {children}
-    </Pressable>
+    <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
+      <Defs>
+        <RadialGradient id="felt" cx="50%" cy="50%" r="70%">
+          <Stop offset="0" stopColor={C.felt} />
+          <Stop offset="0.6" stopColor={C.table} />
+          <Stop offset="1" stopColor={C.bg} />
+        </RadialGradient>
+      </Defs>
+      <Rect width="100%" height="100%" fill="url(#felt)" />
+    </Svg>
   );
 }
 
-/** A hand card you can tap to select or drag onto a combination or the discard pile. `onDrop` says whether a move was sent. */
-function HandCard({ card, selected, grouped, onPress, onDrop }: { card: Card; selected: boolean; grouped: boolean; onPress: () => void; onDrop: (id: string, x: number, y: number) => Promise<boolean> }) {
-  const x = useSharedValue(0);
-  const y = useSharedValue(0);
-  const lift = useSharedValue(0);
-  const back = () => {
-    x.value = withSpring(0);
-    y.value = withSpring(0);
-    lift.value = withTiming(0);
-  };
-  const drop = async (ax: number, ay: number) => {
-    if (!(await onDrop(card.id, ax, ay))) return back();
-    // Sent: the card waits on the target and leaves with the next server view. If the server rejects the move, it flies home.
-    lift.value = withTiming(0);
-    setTimeout(back, 1500);
-  };
-  const pan = usePanGesture({
-    minDistance: 8,
-    onActivate: () => {
-      lift.value = withTiming(1, { duration: 120 });
-    },
-    onUpdate: (e) => {
-      x.value = e.translationX;
-      y.value = e.translationY;
-    },
-    onDeactivate: (e) => {
-      if (e.canceled) scheduleOnRN(back);
-      else scheduleOnRN(drop, e.absoluteX, e.absoluteY);
-    },
-  });
-  const moving = useAnimatedStyle(() => ({
-    zIndex: lift.value > 0 ? 10 : 0,
-    transform: [{ translateX: x.value }, { translateY: y.value }, { scale: 1 + 0.15 * lift.value }],
-  }));
+function IconButton({ label, onPress, children }: { label: string; onPress: () => void; children: ReactNode }) {
   return (
-    <GestureDetector gesture={pan}>
-      <Animated.View entering={FadeInDown} exiting={FadeOut} layout={LinearTransition} style={[styles.handSlot, grouped && styles.grouped, moving]}>
-        <CardFace card={card} selected={selected} onPress={onPress} />
-      </Animated.View>
-    </GestureDetector>
+    <Pressable onPress={onPress} hitSlop={6} accessibilityRole="button" accessibilityLabel={label} style={styles.iconButton}>
+      {children}
+    </Pressable>
   );
 }
 
@@ -71,25 +45,50 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
   const t = view.table!;
   const n = view.playerCount;
   const me = view.you;
-  const myTurn = t.activeSeat === me && view.status === "playing";
+  const playing = view.status === "playing";
+  const myTurn = t.activeSeat === me && playing && !dropped;
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(id);
   }, []);
-  const secondsLeft = Math.max(0, Math.ceil((t.turnMsLeft - (now - receivedAt)) / 1000));
+  const msLeft = Math.max(0, t.turnMsLeft - (now - receivedAt));
 
   // Hand order is local: Sort rearranges it, new cards go on the right.
   const [order, setOrder] = useState<string[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[][]>([]);
+  const [sortOpen, setSortOpen] = useState(false);
+  const [sheet, setSheet] = useState<"menu" | "scores" | null>(null);
   const byId = new Map(view.hand.map((c) => [c.id, c]));
   const hand = [...order.filter((id) => byId.has(id)), ...view.hand.filter((c) => !order.includes(c.id)).map((c) => c.id)].map((id) => byId.get(id)!);
   const live = (ids: string[]) => ids.filter((id) => byId.has(id));
   const sel = live(selected);
   const staged = groups.map(live).filter((g) => g.length > 0);
   const inGroup = new Set(staged.flat());
+
+  // A single card that just arrived (a draw) is outlined for a moment. A new deal changes many cards and is not.
+  const prevHand = useRef<Set<string> | null>(null);
+  const [fresh, setFresh] = useState<string | null>(null);
+  useEffect(() => {
+    const prev = prevHand.current;
+    prevHand.current = new Set(view.hand.map((c) => c.id));
+    const added = prev ? view.hand.filter((c) => !prev.has(c.id)) : [];
+    if (added.length !== 1) return;
+    setFresh(added[0]!.id);
+    const id = setTimeout(() => setFresh(null), 1200);
+    return () => clearTimeout(id);
+  }, [view.hand]);
+
+  // Round results show once per finished round; a reconnect starts from the current count, so nothing replays.
+  const [seenRounds, setSeenRounds] = useState(view.rounds.length);
+  const lastRound = playing && view.rounds.length > seenRounds ? view.rounds.at(-1)! : null;
+  useEffect(() => {
+    if (!lastRound) return;
+    const id = setTimeout(() => setSeenRounds(view.rounds.length), 6000);
+    return () => clearTimeout(id);
+  }, [lastRound, view.rounds.length]);
 
   const cardsOf = (ids: string[]) => ids.map((id) => byId.get(id)!);
   /** Tap order first (a joker sits where it was tapped), else the order in hand. */
@@ -101,7 +100,7 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
     setSelected(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]);
   };
 
-  const sort = () => setOrder([...view.hand].sort((a, b) => sortKey(a) - sortKey(b)).map((c) => c.id));
+  const sort = (key: (c: Card) => number) => (setOrder([...view.hand].sort((a, b) => key(a) - key(b)).map((c) => c.id)), setSortOpen(false));
   const group = () => (setGroups([...staged, asCombo(sel)]), clear());
   const talaj = () => {
     const combos = sel.length > 0 ? [...staged, asCombo(sel)] : staged;
@@ -119,7 +118,10 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
     else onMove({ kind: "add", comboId: combo.id, cardIds: ids, side: canAdd(combo, cards, "end") || !canAdd(combo, cards, "start") ? "end" : "start" });
     clear();
   };
-  const tapCombo = (combo: Combination) => myTurn && sel.length > 0 && playOn(combo, sel);
+  const playPhase = myTurn && t.phase === "play";
+  const tapCombo = (combo: Combination) => playPhase && sel.length > 0 && playOn(combo, sel);
+  /** Gold outline on combinations the selection can extend (R-19). The server still decides. */
+  const extendable = (combo: Combination) => playPhase && !!t.players[me]?.opened && sel.length > 0 && (canAdd(combo, cardsOf(sel), "end") || canAdd(combo, cardsOf(sel), "start"));
 
   // Drop targets: each combination by id, plus "discard". Measured at drop time because the table reflows as combinations grow.
   const zones = useRef(new Map<string, ComponentRef<typeof RNView>>());
@@ -132,7 +134,7 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
   };
   /** Dragging a selected card plays the whole selection; dragging any other card plays just that card. The server still validates. */
   const dropCard = async (id: string, ax: number, ay: number) => {
-    if (!myTurn || t.phase !== "play") return false;
+    if (!playPhase) return false;
     const ids = sel.includes(id) ? sel : [id];
     const key = await hit(ax, ay);
     if (key === "discard") {
@@ -149,7 +151,11 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
 
   const drawPhase = myTurn && t.phase === "draw";
   const top = t.discardPile.at(-1);
-  const unitTotal = (seat: number) => view.totals[view.companion ? seat % 2 : seat] ?? 0;
+  const unitOf = (seat: number) => (view.companion ? seat % 2 : seat);
+  const nameOf = (seat: number) => (seat === me ? "You" : view.seats[seat]?.name || `Player ${seat + 1}`);
+  const units: Unit[] = view.companion
+    ? [0, 1].map((team) => ({ label: `Team ${team === 0 ? "A" : "B"}`, members: [team, team + 2].map(nameOf).join(" & "), mine: me % 2 === team }))
+    : view.seats.map((_, seat) => ({ label: nameOf(seat), members: "", mine: seat === me }));
 
   const seatAt = (rel: number) => (me + rel) % n;
   // Seats count to the left (R-04), so the next player sits on your left.
@@ -158,30 +164,37 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
   const seatBox = (seat: number) => {
     const info = view.seats[seat];
     const p = t.players[seat]!;
-    const active = t.activeSeat === seat && view.status === "playing";
+    const active = t.activeSeat === seat && playing;
     return (
-      <RNView style={[styles.seat, active && styles.activeSeat, p.forfeited && styles.out]}>
-        {info?.avatar ? <Image source={{ uri: info.avatar }} style={styles.avatar} /> : <RNView style={styles.avatar} />}
-        <RNView>
-          <Text style={styles.seatName} numberOfLines={1}>{seat === me ? "You" : info?.name || `Player ${seat + 1}`}</Text>
-          <Text style={styles.seatInfo}>
-            {p.forfeited ? "Left" : `${p.handCount} cards · ${unitTotal(seat)} pts`}
-            {p.opened ? " · opened" : ""}
-            {info && !info.connected ? " · offline" : ""}
-          </Text>
-        </RNView>
-        {active && <Text style={styles.timer}>{secondsLeft}</Text>}
-      </RNView>
+      <Seat
+        name={nameOf(seat)}
+        avatar={info?.avatar || undefined}
+        handCount={p.handCount}
+        total={view.totals[unitOf(seat)] ?? 0}
+        opened={p.opened}
+        connected={info?.connected ?? false}
+        forfeited={p.forfeited}
+        active={active}
+        msLeft={active ? msLeft : 0}
+        team={view.companion ? seat % 2 : null}
+        isMe={seat === me}
+      />
     );
   };
 
   const combos = (seat: number, vertical = false) => (
     <RNView style={[styles.combos, vertical && styles.combosVertical]}>
       {t.combinations.filter((c) => c.ownerSeat === seat).map((combo) => (
-        <Pressable key={combo.id} ref={zone(combo.id)} onPress={() => tapCombo(combo)} style={styles.combo}>
+        <Pressable
+          key={combo.id}
+          ref={zone(combo.id)}
+          onPress={() => tapCombo(combo)}
+          accessibilityLabel={`${combo.type === "TRIA" ? "Tria" : "Serie"} of ${nameOf(seat)}`}
+          style={[styles.combo, view.companion && { borderColor: (seat % 2 === 0 ? C.teamA : C.teamB) + "55" }, extendable(combo) && styles.target]}
+        >
           {combo.cards.map((c) => (
-            <Animated.View key={c.id} entering={ZoomIn.springify()}>
-              <CardFace card={c} small />
+            <Animated.View key={c.id} entering={ZoomIn.duration(300)} style={styles.comboCard}>
+              <CardFace card={c} scale={0.55} />
             </Animated.View>
           ))}
         </Pressable>
@@ -197,129 +210,175 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
       </RNView>
     );
 
-  const button = (label: string, onPress: () => void, enabled: boolean) => (
-    <Pressable style={[styles.action, !enabled && styles.disabled]} disabled={!enabled} onPress={onPress}>
-      <Text style={styles.actionText}>{label}</Text>
-    </Pressable>
-  );
-
-  const winnerName =
-    view.winner === null ? "" : view.companion ? `Team ${view.winner + 1}${view.winner === me % 2 ? " (you)" : ""}` : view.winner === me ? "You" : view.seats[view.winner]?.name || `Player ${view.winner + 1}`;
+  const status = !playing ? "" : myTurn ? (t.phase === "draw" ? "Your turn · Draw a card" : "Your turn · Talaj, then discard one card") : dropped ? "" : `Waiting for ${nameOf(t.activeSeat)}`;
+  const canTalaj = playPhase && (sel.length >= 3 || staged.length > 0);
+  const canDiscard = playPhase && sel.length === 1;
+  const roundNumber = view.rounds.length + (playing ? 1 : 0);
 
   return (
     <RNView style={styles.table}>
+      <Felt />
+
       <RNView style={styles.topRow}>
-        {place.top !== null && (
-          <>
-            {seatBox(place.top)}
-            {combos(place.top)}
-          </>
-        )}
+        <IconButton label="Menu" onPress={() => setSheet("menu")}>
+          <Menu size={20} color={C.ivory} />
+        </IconButton>
+        <RNView style={styles.topSeat}>
+          {place.top !== null && (
+            <>
+              {seatBox(place.top)}
+              {combos(place.top)}
+            </>
+          )}
+        </RNView>
+        <RNView style={styles.corner}>
+          <IconButton label="Scoreboard" onPress={() => setSheet("scores")}>
+            <ListOrdered size={20} color={C.ivory} />
+          </IconButton>
+          <RNView accessibilityLabel={dropped ? "Disconnected" : "Connected"} style={styles.conn}>
+            {dropped ? <WifiOff size={16} color={C.red} /> : <Wifi size={16} color={C.muted} />}
+          </RNView>
+        </RNView>
       </RNView>
 
       <RNView style={styles.middle}>
         {side(place.left)}
         <RNView style={styles.center}>
-          <Text style={styles.chip}>Next opening: more than {t.openingThreshold - 1}</Text>
+          <Text style={styles.chip}>
+            Round {roundNumber} · {view.companion ? "2 vs 2" : `${n} players`} · Next opening: more than {t.openingThreshold - 1}
+          </Text>
           <RNView style={styles.piles}>
-            <RNView style={drawPhase && styles.glow}>
-              <CardFace card={null} onPress={drawPhase ? () => onMove({ kind: "draw" }) : undefined}>
-                <Text style={styles.backText}>{t.drawCount}</Text>
-              </CardFace>
+            <RNView style={styles.pileLabel}>
+              <RNView style={[styles.pile, drawPhase && styles.target]}>
+                <CardStack>
+                  <CardFace card={null} onPress={drawPhase ? () => onMove({ kind: "draw" }) : undefined}>
+                    <Text style={styles.backText}>{t.drawCount}</Text>
+                  </CardFace>
+                </CardStack>
+              </RNView>
+              <Text style={styles.pileText}>Draw</Text>
             </RNView>
             {t.firstDiscard && (
               <RNView style={styles.pileLabel}>
-                <CardFace card={t.firstDiscard} onPress={drawPhase ? () => onMove({ kind: "takeFirstDiscard" }) : undefined} />
-                <Text style={styles.seatInfo}>First discard</Text>
+                <RNView style={[styles.pile, drawPhase && styles.target]}>
+                  <CardFace card={t.firstDiscard} onPress={drawPhase ? () => onMove({ kind: "takeFirstDiscard" }) : undefined} />
+                </RNView>
+                <Text style={styles.pileText}>First discard</Text>
               </RNView>
             )}
-            <RNView ref={zone("discard")} collapsable={false}>
-              {top ? (
-                <Animated.View key={top.id} entering={ZoomIn.springify()}>
-                  <CardFace card={top} onPress={drawPhase ? () => onMove({ kind: "takeDiscard" }) : undefined} />
-                </Animated.View>
-              ) : (
-                <RNView style={[styles.card, styles.empty]} />
-              )}
+            <RNView style={styles.pileLabel}>
+              <RNView ref={zone("discard")} collapsable={false} style={[styles.pile, (drawPhase || canDiscard) && !!top && styles.target]}>
+                {top ? (
+                  <CardStack layers={t.discardPile.length > 1 ? 1 : 0}>
+                    <Animated.View key={top.id} entering={ZoomIn.duration(220)}>
+                      <CardFace card={top} onPress={drawPhase ? () => onMove({ kind: "takeDiscard" }) : undefined} />
+                    </Animated.View>
+                  </CardStack>
+                ) : (
+                  <RNView style={[styles.empty, canDiscard && { borderColor: C.gold }]} />
+                )}
+              </RNView>
+              <Text style={styles.pileText}>Discard</Text>
             </RNView>
           </RNView>
-          {!!notice && <Text style={styles.notice}>{notice}</Text>}
-          {dropped && <Text style={styles.notice}>Reconnecting…</Text>}
+          {!!status && <Text style={[styles.status, myTurn && { color: C.gold }]}>{status}</Text>}
+          {!!notice && (
+            <Animated.Text entering={FadeIn.duration(150)} exiting={FadeOut.duration(150)} style={styles.toast}>
+              {notice}
+            </Animated.Text>
+          )}
         </RNView>
         {side(place.right)}
       </RNView>
 
       <RNView style={styles.bottom}>
-        <RNView style={styles.mine}>
-          <RNView style={styles.myRow}>
-            {seatBox(me)}
+        <RNView style={styles.myRow}>
+          {seatBox(me)}
+          <RNView style={styles.myCombos}>
             {combos(me)}
             {staged.map((g, i) => {
               const c = checkCombo(cardsOf(g));
-              return <Text key={i} style={styles.group}>{c ? `${c.type === "TRIA" ? "Tria" : "Serie"} ${c.points}` : "Not a combination"}</Text>;
+              return <Text key={i} style={[styles.group, !c && { color: C.red, borderColor: C.red }]}>{c ? `${c.type === "TRIA" ? "Tria" : "Serie"} ${c.points}` : "Not a combination"}</Text>;
             })}
           </RNView>
-          <RNView style={styles.hand}>
-            {hand.map((c) => (
-              <HandCard key={c.id} card={c} selected={sel.includes(c.id)} grouped={inGroup.has(c.id)} onPress={() => tapCard(c.id)} onDrop={dropCard} />
-            ))}
+          <RNView style={styles.actions}>
+            {sortOpen && (
+              <RNView style={styles.sortMenu}>
+                <Button label="By suit" onPress={() => sort(bySuit)} />
+                <Button label="By rank" onPress={() => sort(byRank)} />
+              </RNView>
+            )}
+            <Button label="Sort" icon={<ArrowDownUp size={16} color={C.ivory} />} onPress={() => setSortOpen(!sortOpen)} />
+            <Button label="Group" icon={<Layers size={16} color={sel.length >= 3 ? C.ivory : C.muted} />} onPress={group} disabled={sel.length < 3} />
+            <Button label="Talaj" kind="primary" icon={<Check size={16} color={canTalaj ? C.surface : C.muted} />} onPress={talaj} disabled={!canTalaj} />
+            <Button label="Discard" kind={canTalaj ? "secondary" : "primary"} icon={<ArrowDownToLine size={16} color={!canDiscard ? C.muted : canTalaj ? C.ivory : C.surface} />} onPress={discard} disabled={!canDiscard} />
           </RNView>
         </RNView>
-        <RNView style={styles.actions}>
-          {button("Sort", sort, true)}
-          {button("Group", group, sel.length >= 3)}
-          {button("Talaj", talaj, myTurn && t.phase === "play" && (sel.length >= 3 || staged.length > 0))}
-          {button("Discard", discard, myTurn && t.phase === "play" && sel.length === 1)}
+        <RNView style={styles.hand}>
+          {hand.map((c) => (
+            <HandCard key={c.id} card={c} selected={sel.includes(c.id)} grouped={inGroup.has(c.id)} fresh={fresh === c.id} onPress={() => tapCard(c.id)} onDrop={dropCard} />
+          ))}
         </RNView>
       </RNView>
 
-      {view.status === "finished" && (
-        <RNView style={styles.overlay}>
-          <Text style={styles.overlayText}>{winnerName} won</Text>
-          {button("Home", onLeave, true)}
+      {dropped && (
+        <RNView style={styles.reconnect} pointerEvents="none">
+          <Loader size={14} color={C.ivory} />
+          <Text style={styles.reconnectText}>Reconnecting to the game…</Text>
         </RNView>
       )}
+
+      {lastRound && (
+        <RoundResult
+          round={lastRound}
+          number={view.rounds.length}
+          units={units}
+          totals={view.totals}
+          winnerName={nameOf(lastRound.winner)}
+          onClose={() => setSeenRounds(view.rounds.length)}
+          onScores={() => (setSeenRounds(view.rounds.length), setSheet("scores"))}
+        />
+      )}
+
+      {view.status === "finished" && view.winner !== null && <FinalResult winner={view.winner} units={units} totals={view.totals} rounds={view.rounds.length} onHome={onLeave} />}
+
+      <Scoreboard visible={sheet === "scores"} onClose={() => setSheet(null)} units={units} rounds={view.rounds} totals={view.totals} target={view.target} />
+      <GameMenu visible={sheet === "menu"} onClose={() => setSheet(null)} code={view.code} onLeave={onLeave} />
     </RNView>
   );
 }
 
 const styles = StyleSheet.create({
-  table: { flex: 1, backgroundColor: GREEN, padding: 6 },
-  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 44 },
+  table: { flex: 1, backgroundColor: C.table, padding: 6 },
+  topRow: { flexDirection: "row", alignItems: "flex-start", minHeight: 48 },
+  topSeat: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  corner: { flexDirection: "row", alignItems: "center", gap: 2 },
+  iconButton: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#00000033" },
+  conn: { width: 24, alignItems: "center" },
   middle: { flex: 1, flexDirection: "row" },
-  side: { width: "26%", alignItems: "center", gap: 4 },
+  side: { width: "24%", alignItems: "center", gap: 4 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 6 },
-  piles: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
-  pileLabel: { alignItems: "center" },
-  chip: { color: "white", backgroundColor: "#00000040", paddingHorizontal: 10, paddingVertical: 3, borderRadius: 12, fontSize: 12 },
-  notice: { color: "#fff3b0", fontSize: 14, fontWeight: "600" },
-  bottom: { flexDirection: "row", alignItems: "flex-end", gap: 6 },
-  mine: { flex: 1, gap: 4 },
-  myRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
-  hand: { flexDirection: "row" },
-  handSlot: { flex: 1, maxWidth: 46, alignItems: "center" },
-  grouped: { opacity: 0.45 },
-  actions: { gap: 4 },
-  action: { backgroundColor: "white", borderRadius: 6, paddingVertical: 6, paddingHorizontal: 10, alignItems: "center", minWidth: 72 },
-  actionText: { color: GREEN, fontWeight: "700", fontSize: 13 },
-  disabled: { opacity: 0.35 },
-  seat: { flexDirection: "row", alignItems: "center", gap: 6, padding: 4, borderRadius: 8, borderWidth: 2, borderColor: "transparent" },
-  activeSeat: { borderColor: "#ffd34d", backgroundColor: "#ffffff1a" },
-  out: { opacity: 0.4 },
-  avatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#ffffff33" },
-  seatName: { color: "white", fontWeight: "700", fontSize: 13, maxWidth: 110 },
-  seatInfo: { color: "#d8eadf", fontSize: 11 },
-  timer: { color: "#ffd34d", fontWeight: "800", fontSize: 18, minWidth: 22, textAlign: "center" },
-  combos: { flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center" },
+  piles: { flexDirection: "row", gap: 14, alignItems: "flex-start" },
+  pileLabel: { alignItems: "center", gap: 2 },
+  pile: { padding: 3, borderRadius: 9, borderWidth: 1.5, borderColor: "transparent" },
+  pileText: { color: C.muted, fontSize: 11, fontFamily: F.regular },
+  target: { borderColor: C.gold },
+  chip: { color: C.ivory, backgroundColor: "#00000040", paddingHorizontal: 10, paddingVertical: 3, borderRadius: 12, fontSize: 11, fontFamily: F.regular, overflow: "hidden" },
+  status: { color: C.ivory, fontSize: 13, fontFamily: F.semi },
+  toast: { color: C.ivory, backgroundColor: C.red, paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12, fontSize: 13, fontFamily: F.semi, overflow: "hidden" },
+  bottom: { gap: 2 },
+  myRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  myCombos: { flex: 1, flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
+  hand: { flexDirection: "row", justifyContent: "center", paddingTop: 16 },
+  actions: { flexDirection: "row", gap: 6 },
+  sortMenu: { position: "absolute", left: 0, bottom: 50, gap: 4, backgroundColor: C.surface, padding: 6, borderRadius: 12, borderWidth: 1, borderColor: C.line, zIndex: 20 },
+  combos: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center" },
   combosVertical: { flexDirection: "column", alignItems: "center" },
-  combo: { flexDirection: "row", padding: 2, borderRadius: 4, backgroundColor: "#00000026" },
-  group: { color: "#fff3b0", fontSize: 12, borderWidth: 1, borderColor: "#fff3b0", borderStyle: "dashed", borderRadius: 4, paddingHorizontal: 4 },
-  card: { width: 42, height: 60, borderRadius: 4, overflow: "hidden" },
-  cardSmall: { marginRight: -4 },
-  selected: { transform: [{ translateY: -10 }], outlineColor: "#ffd34d", outlineWidth: 2 },
-  backText: { position: "absolute", alignSelf: "center", top: 20, color: "white", fontWeight: "800", textShadowColor: "black", textShadowRadius: 3 },
-  glow: { borderColor: "#ffd34d", borderWidth: 2, borderRadius: 6 },
-  empty: { backgroundColor: "transparent", borderWidth: 1, borderStyle: "dashed", borderColor: "#ffffff66" },
-  overlay: { ...StyleSheet.absoluteFill, backgroundColor: "#000000aa", alignItems: "center", justifyContent: "center", gap: 12 },
-  overlayText: { color: "white", fontSize: 28, fontWeight: "800" },
+  combo: { flexDirection: "row", padding: 3, paddingRight: 7, borderRadius: 8, backgroundColor: "#0000002e", borderWidth: 1.5, borderColor: "transparent" },
+  comboCard: { marginRight: -4 },
+  group: { color: C.gold, fontSize: 12, fontFamily: F.semi, borderWidth: 1, borderColor: C.gold, borderStyle: "dashed", borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
+  backText: { position: "absolute", alignSelf: "center", top: 20, color: C.ivory, fontFamily: F.bold, fontVariant: ["tabular-nums"], textShadowColor: "black", textShadowRadius: 3 },
+  empty: { width: 42, height: 60, borderRadius: 6, borderWidth: 1, borderStyle: "dashed", borderColor: "#ffffff55" },
+  reconnect: { position: "absolute", top: 8, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: C.surface, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: C.line },
+  reconnectText: { color: C.ivory, fontSize: 12, fontFamily: F.semi },
 });
