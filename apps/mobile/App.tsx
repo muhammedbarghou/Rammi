@@ -3,11 +3,14 @@ import type { Move } from "@rami/rules";
 import type { Session } from "@supabase/supabase-js";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { connect, sendMove, type PartyOptions, type View } from "./src/game";
 import { Home } from "./src/Home";
 import { Lobby } from "./src/Lobby";
 import { SignIn } from "./src/SignIn";
 import { supabase } from "./src/supabase";
+import { GREEN } from "./src/ui";
 import { Table } from "./src/Table";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -65,9 +68,10 @@ export default function App() {
   else screen = <Table view={view.view} receivedAt={view.at} notice={notice} dropped={dropped} onMove={move} onLeave={leave} />;
 
   return (
-    <>
+    <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar hidden />
-      {screen}
-    </>
+      {/* Android draws edge to edge, so keep content clear of the nav bar and any notch. */}
+      <SafeAreaView style={{ flex: 1, backgroundColor: GREEN }}>{screen}</SafeAreaView>
+    </GestureHandlerRootView>
   );
 }

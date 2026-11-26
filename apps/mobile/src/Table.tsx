@@ -1,21 +1,68 @@
 import { canAdd, checkCombo, RANKS, SUITS, type Card, type Combination, type Move } from "@rami/rules";
-import { useEffect, useState } from "react";
+import { type ComponentRef, type ReactNode, useEffect, useRef, useState } from "react";
 import { Image, Pressable, StyleSheet, Text, View as RNView } from "react-native";
+import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
+import Animated, { FadeInDown, FadeOut, LinearTransition, useAnimatedStyle, useSharedValue, withSpring, withTiming, ZoomIn } from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
+import { CARD_IMAGES } from "./cardImages";
 import type { View } from "./game";
 import { GREEN } from "./ui";
 
 type Props = { view: View; receivedAt: number; notice: string; dropped: boolean; onMove: (m: Move) => void; onLeave: () => void };
 
-const SUIT_SIGN = { H: "♥", D: "♦", S: "♠", C: "♣" } as const;
 const sortKey = (c: Card) => (c.suit ? SUITS.indexOf(c.suit) * 20 + RANKS.indexOf(c.rank as (typeof RANKS)[number]) : 99);
 
-function CardFace({ card, small, selected, onPress }: { card: Card; small?: boolean; selected?: boolean; onPress?: () => void }) {
-  const red = card.suit === "H" || card.suit === "D";
-  const label = card.rank === "JOKER" ? "★" : `${card.rank}${SUIT_SIGN[card.suit!]}`;
+/** The PNGs are 64x64 with the card at x 11..53, y 2..62, so the frame crops to that 42x60 face. Card ids are `${deck}${rank}${suit}`. */
+function CardFace({ card, small, selected, onPress, children }: { card: Card | null; small?: boolean; selected?: boolean; onPress?: () => void; children?: ReactNode }) {
+  const s = small ? 0.55 : 1;
   return (
-    <Pressable onPress={onPress} disabled={!onPress} style={[small ? styles.cardSmall : styles.card, selected && styles.selected]}>
-      <Text style={[small ? styles.cardTextSmall : styles.cardText, { color: card.rank === "JOKER" ? "#7a3cc2" : red ? "#c0262d" : "#111" }]}>{label}</Text>
+    <Pressable onPress={onPress} disabled={!onPress} style={[styles.card, { width: 42 * s, height: 60 * s }, small && styles.cardSmall, selected && styles.selected]}>
+      <Image source={CARD_IMAGES[card ? card.id.slice(1) : "back"]} style={{ width: 64 * s, height: 64 * s, marginLeft: -11 * s, marginTop: -2 * s }} />
+      {children}
     </Pressable>
+  );
+}
+
+/** A hand card you can tap to select or drag onto a combination or the discard pile. `onDrop` says whether a move was sent. */
+function HandCard({ card, selected, grouped, onPress, onDrop }: { card: Card; selected: boolean; grouped: boolean; onPress: () => void; onDrop: (id: string, x: number, y: number) => Promise<boolean> }) {
+  const x = useSharedValue(0);
+  const y = useSharedValue(0);
+  const lift = useSharedValue(0);
+  const back = () => {
+    x.value = withSpring(0);
+    y.value = withSpring(0);
+    lift.value = withTiming(0);
+  };
+  const drop = async (ax: number, ay: number) => {
+    if (!(await onDrop(card.id, ax, ay))) return back();
+    // Sent: the card waits on the target and leaves with the next server view. If the server rejects the move, it flies home.
+    lift.value = withTiming(0);
+    setTimeout(back, 1500);
+  };
+  const pan = usePanGesture({
+    minDistance: 8,
+    onActivate: () => {
+      lift.value = withTiming(1, { duration: 120 });
+    },
+    onUpdate: (e) => {
+      x.value = e.translationX;
+      y.value = e.translationY;
+    },
+    onDeactivate: (e) => {
+      if (e.canceled) scheduleOnRN(back);
+      else scheduleOnRN(drop, e.absoluteX, e.absoluteY);
+    },
+  });
+  const moving = useAnimatedStyle(() => ({
+    zIndex: lift.value > 0 ? 10 : 0,
+    transform: [{ translateX: x.value }, { translateY: y.value }, { scale: 1 + 0.15 * lift.value }],
+  }));
+  return (
+    <GestureDetector gesture={pan}>
+      <Animated.View entering={FadeInDown} exiting={FadeOut} layout={LinearTransition} style={[styles.handSlot, grouped && styles.grouped, moving]}>
+        <CardFace card={card} selected={selected} onPress={onPress} />
+      </Animated.View>
+    </GestureDetector>
   );
 }
 
@@ -64,14 +111,40 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
   };
   const discard = () => (onMove({ kind: "discard", cardId: sel[0]! }), clear());
 
-  /** Tap a card, then a combination: add it, or swap it for a Tria's joker (R-19, R-22). */
-  const tapCombo = (combo: Combination) => {
-    if (!myTurn || sel.length === 0) return;
-    const cards = cardsOf(sel);
-    const isSwap = sel.length === 1 && combo.type === "TRIA" && combo.cards.some((c) => c.rank === "JOKER") && !canAdd(combo, cards, "end");
-    if (isSwap) onMove({ kind: "swapJoker", comboId: combo.id, cardId: sel[0]! });
-    else onMove({ kind: "add", comboId: combo.id, cardIds: sel, side: canAdd(combo, cards, "end") || !canAdd(combo, cards, "start") ? "end" : "start" });
+  /** Add cards to a combination, or swap one for a Tria's joker (R-19, R-22). */
+  const playOn = (combo: Combination, ids: string[]) => {
+    const cards = cardsOf(ids);
+    const isSwap = ids.length === 1 && combo.type === "TRIA" && combo.cards.some((c) => c.rank === "JOKER") && !canAdd(combo, cards, "end");
+    if (isSwap) onMove({ kind: "swapJoker", comboId: combo.id, cardId: ids[0]! });
+    else onMove({ kind: "add", comboId: combo.id, cardIds: ids, side: canAdd(combo, cards, "end") || !canAdd(combo, cards, "start") ? "end" : "start" });
     clear();
+  };
+  const tapCombo = (combo: Combination) => myTurn && sel.length > 0 && playOn(combo, sel);
+
+  // Drop targets: each combination by id, plus "discard". Measured at drop time because the table reflows as combinations grow.
+  const zones = useRef(new Map<string, ComponentRef<typeof RNView>>());
+  const zone = (key: string) => (el: ComponentRef<typeof RNView> | null) => void (el ? zones.current.set(key, el) : zones.current.delete(key));
+  const hit = async (ax: number, ay: number) => {
+    const keys = await Promise.all(
+      [...zones.current].map(([key, el]) => new Promise<string | null>((res) => el.measureInWindow((x, y, w, h) => res(ax >= x && ax <= x + w && ay >= y && ay <= y + h ? key : null)))),
+    );
+    return keys.find((k) => k !== null) ?? null;
+  };
+  /** Dragging a selected card plays the whole selection; dragging any other card plays just that card. The server still validates. */
+  const dropCard = async (id: string, ax: number, ay: number) => {
+    if (!myTurn || t.phase !== "play") return false;
+    const ids = sel.includes(id) ? sel : [id];
+    const key = await hit(ax, ay);
+    if (key === "discard") {
+      if (ids.length !== 1) return false;
+      onMove({ kind: "discard", cardId: ids[0]! });
+      clear();
+      return true;
+    }
+    const combo = t.combinations.find((c) => c.id === key);
+    if (!combo) return false;
+    playOn(combo, ids);
+    return true;
   };
 
   const drawPhase = myTurn && t.phase === "draw";
@@ -105,8 +178,12 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
   const combos = (seat: number, vertical = false) => (
     <RNView style={[styles.combos, vertical && styles.combosVertical]}>
       {t.combinations.filter((c) => c.ownerSeat === seat).map((combo) => (
-        <Pressable key={combo.id} onPress={() => tapCombo(combo)} style={styles.combo}>
-          {combo.cards.map((c) => <CardFace key={c.id} card={c} small />)}
+        <Pressable key={combo.id} ref={zone(combo.id)} onPress={() => tapCombo(combo)} style={styles.combo}>
+          {combo.cards.map((c) => (
+            <Animated.View key={c.id} entering={ZoomIn.springify()}>
+              <CardFace card={c} small />
+            </Animated.View>
+          ))}
         </Pressable>
       ))}
     </RNView>
@@ -145,16 +222,26 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
         <RNView style={styles.center}>
           <Text style={styles.chip}>Next opening: more than {t.openingThreshold - 1}</Text>
           <RNView style={styles.piles}>
-            <Pressable style={[styles.card, styles.back, drawPhase && styles.glow]} disabled={!drawPhase} onPress={() => onMove({ kind: "draw" })}>
-              <Text style={styles.backText}>{t.drawCount}</Text>
-            </Pressable>
+            <RNView style={drawPhase && styles.glow}>
+              <CardFace card={null} onPress={drawPhase ? () => onMove({ kind: "draw" }) : undefined}>
+                <Text style={styles.backText}>{t.drawCount}</Text>
+              </CardFace>
+            </RNView>
             {t.firstDiscard && (
               <RNView style={styles.pileLabel}>
                 <CardFace card={t.firstDiscard} onPress={drawPhase ? () => onMove({ kind: "takeFirstDiscard" }) : undefined} />
                 <Text style={styles.seatInfo}>First discard</Text>
               </RNView>
             )}
-            {top ? <CardFace card={top} onPress={drawPhase ? () => onMove({ kind: "takeDiscard" }) : undefined} /> : <RNView style={[styles.card, styles.empty]} />}
+            <RNView ref={zone("discard")} collapsable={false}>
+              {top ? (
+                <Animated.View key={top.id} entering={ZoomIn.springify()}>
+                  <CardFace card={top} onPress={drawPhase ? () => onMove({ kind: "takeDiscard" }) : undefined} />
+                </Animated.View>
+              ) : (
+                <RNView style={[styles.card, styles.empty]} />
+              )}
+            </RNView>
           </RNView>
           {!!notice && <Text style={styles.notice}>{notice}</Text>}
           {dropped && <Text style={styles.notice}>Reconnecting…</Text>}
@@ -174,9 +261,7 @@ export function Table({ view, receivedAt, notice, dropped, onMove, onLeave }: Pr
           </RNView>
           <RNView style={styles.hand}>
             {hand.map((c) => (
-              <RNView key={c.id} style={[styles.handSlot, inGroup.has(c.id) && styles.grouped]}>
-                <CardFace card={c} selected={sel.includes(c.id)} onPress={() => tapCard(c.id)} />
-              </RNView>
+              <HandCard key={c.id} card={c} selected={sel.includes(c.id)} grouped={inGroup.has(c.id)} onPress={() => tapCard(c.id)} onDrop={dropCard} />
             ))}
           </RNView>
         </RNView>
@@ -229,15 +314,12 @@ const styles = StyleSheet.create({
   combosVertical: { flexDirection: "column", alignItems: "center" },
   combo: { flexDirection: "row", padding: 2, borderRadius: 4, backgroundColor: "#00000026" },
   group: { color: "#fff3b0", fontSize: 12, borderWidth: 1, borderColor: "#fff3b0", borderStyle: "dashed", borderRadius: 4, paddingHorizontal: 4 },
-  card: { width: 42, height: 60, borderRadius: 5, backgroundColor: "white", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#999" },
-  cardSmall: { width: 22, height: 30, borderRadius: 3, backgroundColor: "white", alignItems: "center", justifyContent: "center", marginRight: -4, borderWidth: 1, borderColor: "#999" },
-  cardText: { fontSize: 15, fontWeight: "700" },
-  cardTextSmall: { fontSize: 10, fontWeight: "700" },
-  selected: { transform: [{ translateY: -10 }], borderColor: "#ffd34d", borderWidth: 2 },
-  back: { backgroundColor: "#7a1f2b" },
-  backText: { color: "white", fontWeight: "700" },
-  glow: { borderColor: "#ffd34d", borderWidth: 2 },
-  empty: { backgroundColor: "transparent", borderStyle: "dashed", borderColor: "#ffffff66" },
+  card: { width: 42, height: 60, borderRadius: 4, overflow: "hidden" },
+  cardSmall: { marginRight: -4 },
+  selected: { transform: [{ translateY: -10 }], outlineColor: "#ffd34d", outlineWidth: 2 },
+  backText: { position: "absolute", alignSelf: "center", top: 20, color: "white", fontWeight: "800", textShadowColor: "black", textShadowRadius: 3 },
+  glow: { borderColor: "#ffd34d", borderWidth: 2, borderRadius: 6 },
+  empty: { backgroundColor: "transparent", borderWidth: 1, borderStyle: "dashed", borderColor: "#ffffff66" },
   overlay: { ...StyleSheet.absoluteFill, backgroundColor: "#000000aa", alignItems: "center", justifyContent: "center", gap: 12 },
   overlayText: { color: "white", fontSize: 28, fontWeight: "800" },
 });
