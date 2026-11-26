@@ -1,4 +1,5 @@
 import { DEFAULT_TARGET } from "@rami/rules";
+import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import type { Session } from "@supabase/supabase-js";
 import { useState } from "react";
 import { Image, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
@@ -26,7 +27,7 @@ export function Home({ session, busy, error, onCreate, onJoin }: Props) {
           {photo && <Image source={{ uri: photo }} style={styles.avatar} />}
           <Text style={ui.title}>{meta.full_name ?? meta.name ?? ""}</Text>
         </View>
-        <Pressable onPress={() => supabase.auth.signOut()}>
+        <Pressable onPress={() => void Promise.all([GoogleSignin.signOut(), supabase.auth.signOut()])}>
           <Text style={ui.text}>Sign out</Text>
         </Pressable>
         {!!error && <Text style={ui.error}>{error}</Text>}

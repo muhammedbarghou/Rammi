@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createClient } from "@supabase/supabase-js";
 import { AppState } from "react-native";
 
-const env = (name: string, value: string | undefined) => {
+export const env = (name: string, value: string | undefined) => {
   if (!value) throw new Error(`${name} is not set`);
   return value;
 };

@@ -1,28 +1,32 @@
-import * as Linking from "expo-linking";
-import * as WebBrowser from "expo-web-browser";
+import { GoogleSignin, isErrorWithCode, isSuccessResponse, statusCodes } from "@react-native-google-signin/google-signin";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { supabase } from "./supabase";
+import { env, supabase } from "./supabase";
 import { ui } from "./ui";
+
+// The web client id makes Google issue an ID token for Supabase. The iOS client id is only needed on iOS.
+GoogleSignin.configure({
+  webClientId: env("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID", process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID),
+  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined,
+});
 
 /** F1: Google only for now (Apple comes later), no passwords. Name and photo come from the social account. */
 export function SignIn() {
   const [error, setError] = useState("");
 
-  // Browser sign-in through Supabase, so it also runs in Expo Go (no native Google module).
+  // Native Google sign-in, then Supabase checks the ID token. Needs a development build, not Expo Go.
   const google = async () => {
     setError("");
     try {
-      const redirectTo = Linking.createURL("auth"); // exp://… in Expo Go, rami://auth in a build
-      const { data, error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo, skipBrowserRedirect: true } });
+      await GoogleSignin.hasPlayServices();
+      const res = await GoogleSignin.signIn();
+      if (!isSuccessResponse(res)) return; // cancelled
+      const token = res.data.idToken;
+      if (!token) throw new Error("Google sign-in returned no ID token");
+      const { error } = await supabase.auth.signInWithIdToken({ provider: "google", token });
       if (error) throw error;
-      const res = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-      if (res.type !== "success") return; // cancelled
-      const code = Linking.parse(res.url).queryParams?.code;
-      if (typeof code !== "string") throw new Error("Google sign-in returned no code");
-      const { error: e2 } = await supabase.auth.exchangeCodeForSession(code);
-      if (e2) throw e2;
     } catch (e) {
+      if (isErrorWithCode(e) && e.code === statusCodes.IN_PROGRESS) return; // second tap while the sheet is open
       setError(e instanceof Error ? e.message : String(e));
     }
   };
