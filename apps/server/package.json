@@ -1,0 +1,22 @@
+{
+  "name": "@rami/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@colyseus/sdk": "0.18.10",
+    "@colyseus/testing": "0.18.6"
+  },
+  "dependencies": {
+    "@colyseus/core": "0.18.29",
+    "@colyseus/ws-transport": "0.18.5",
+    "@rami/rules": "workspace:*",
+    "jose": "6.2.18",
+    "tsx": "4.23.15"
+  }
+}
