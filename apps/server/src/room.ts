@@ -77,6 +77,8 @@ export class TableRoom extends Room {
   totals: number[] = [];
   forfeited: boolean[] = [];
   roundLog: RoundLog[] = [];
+  /** Per round: winner seat and points per seat, or per team in companion mode, for the scoreboard. */
+  history: { winner: number; scores: number[] }[] = [];
   winner: number | null = null;
   deadline = 0;
   startedAt = "";
@@ -182,7 +184,9 @@ export class TableRoom extends Room {
   private endRound() {
     const r = this.round!;
     const perSeat = roundPenalties(r); // R-27
-    (this.companion ? teamPenalties(r) : perSeat).forEach((p, i) => (this.totals[i]! += p)); // R-28
+    const scores = this.companion ? teamPenalties(r) : perSeat; // R-28
+    scores.forEach((p, i) => (this.totals[i]! += p));
+    this.history.push({ winner: r.winner!, scores });
     r.players.forEach((p) => p.forfeited && (this.forfeited[p.seat] = true));
     this.roundLog.push({
       round_number: this.roundLog.length + 1,
@@ -250,6 +254,7 @@ export class TableRoom extends Room {
       target: this.target,
       seats: this.seats.map((s) => ({ userId: s.userId, name: s.name, avatar: s.avatar, connected: s.client !== null })),
       totals: this.totals,
+      rounds: this.history,
       winner: this.winner,
       hand: r?.players[seat]?.hand ?? [],
       table: r && {

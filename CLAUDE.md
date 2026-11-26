@@ -28,7 +28,7 @@ Real-time multiplayer card game for iOS and Android. Real players only, no bots.
 ## Product rules
 - Game terms are never translated: Talaj, Tria (or trio), Serie (or suivi).
 - Languages: Arabic (RTL), French, English. English is the default.
-- Version 1 adds cards to the table by tapping. No drag and drop, no animations yet.
+- Cards go to the table by tap or drag (Reanimated + Gesture Handler). Card art: `apps/mobile/assets/Cards (large)`.
 - Not in version 1: coins and betting, cosmetics, friends and invites, free-text chat, public lobby, ranked matchmaking.
 
 ## Workflow

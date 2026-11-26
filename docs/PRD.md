@@ -205,7 +205,7 @@ Each turn follows this order:
 - **Center:** Draw pile and discard pile, plus a chip showing the current opening threshold ("Next opening: more than N").
 - **Hand:** The player's 14 cards in one row at the bottom, tap to select.
 - **Actions:** Sort, Talaj and Discard buttons.
-- **Adding cards:** Tap a card in the hand to select it, then tap a combination on the table to add it. Drag and drop and animations come in a later version.
+- **Adding cards:** Tap a card in the hand to select it, then tap a combination on the table to add it, or drag a card (or the selection) onto a combination or the discard pile. Cards animate when dealt, played and discarded.
 - **Feedback:** Illegal moves are blocked with a short message (for example "Opening must be 72 or more").
 - **Turn clarity:** Highlight the active player and show the 15-second countdown on their seat.
 - **Right to left:** Arabic mirrors the layout.

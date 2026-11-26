@@ -255,6 +255,8 @@ describe("full game", () => {
     expect(server.totals).toEqual([0, 100, 100]); // R-27: never opened
     expect(server.round!.shuffler).toBe((firstShuffler + 1) % 3); // R-04
     expect(server.status).toBe("playing");
+    // The scoreboard shows each round's winner and points per player or team.
+    await vi.waitFor(() => expect(clients[1]!.view?.rounds).toEqual([{ winner: 0, scores: [0, 100, 100] }]));
 
     server.totals = [0, 450, 450];
     setUpWin(server, 0);
