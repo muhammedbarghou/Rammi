@@ -1,5 +1,4 @@
 import { DEFAULT_TARGET } from "@rami/rules";
-import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import type { Session } from "@supabase/supabase-js";
 import { useState } from "react";
 import { Image, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
@@ -7,7 +6,13 @@ import type { PartyOptions } from "./game";
 import { supabase } from "./supabase";
 import { ui } from "./ui";
 
-type Props = { session: Session; busy: boolean; error: string; onCreate: (o: PartyOptions) => void; onJoin: (code: string) => void };
+const signOut = () => {
+  void supabase.auth.signOut();
+  // Clears the Google session too. Fails in Expo Go (no native module) or for test players; nothing to clear then.
+  import("@react-native-google-signin/google-signin").then((g) => g.GoogleSignin.signOut()).catch(() => {});
+};
+
+type Props ={ session: Session; busy: boolean; error: string; onCreate: (o: PartyOptions) => void; onJoin: (code: string) => void };
 
 /** F2: create a party (2, 3 or 4 players, companion mode, target score) or join one by code. */
 export function Home({ session, busy, error, onCreate, onJoin }: Props) {
@@ -27,7 +32,7 @@ export function Home({ session, busy, error, onCreate, onJoin }: Props) {
           {photo && <Image source={{ uri: photo }} style={styles.avatar} />}
           <Text style={ui.title}>{meta.full_name ?? meta.name ?? ""}</Text>
         </View>
-        <Pressable onPress={() => void Promise.all([GoogleSignin.signOut(), supabase.auth.signOut()])}>
+        <Pressable onPress={signOut}>
           <Text style={ui.text}>Sign out</Text>
         </Pressable>
         {!!error && <Text style={ui.error}>{error}</Text>}

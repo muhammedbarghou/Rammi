@@ -1,14 +1,7 @@
-import { GoogleSignin, isErrorWithCode, isSuccessResponse, statusCodes } from "@react-native-google-signin/google-signin";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { env, supabase } from "./supabase";
 import { ui } from "./ui";
-
-// The web client id makes Google issue an ID token for Supabase. The iOS client id is only needed on iOS.
-GoogleSignin.configure({
-  webClientId: env("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID", process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID),
-  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined,
-});
 
 /** F1: Google only for now (Apple comes later), no passwords. Name and photo come from the social account. */
 export function SignIn() {
@@ -17,7 +10,16 @@ export function SignIn() {
   // Native Google sign-in, then Supabase checks the ID token. Needs a development build, not Expo Go.
   const google = async () => {
     setError("");
+    // Loaded on tap, not at startup: Expo Go has no native Google module and would crash on import.
+    const g = await import("@react-native-google-signin/google-signin").catch(() => null);
+    if (!g) return setError("Google sign-in needs a development build, not Expo Go");
+    const { GoogleSignin, isErrorWithCode, isSuccessResponse, statusCodes } = g;
     try {
+      // The web client id makes Google issue an ID token for Supabase. The iOS client id is only needed on iOS.
+      GoogleSignin.configure({
+        webClientId: env("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID", process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID),
+        iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || undefined,
+      });
       await GoogleSignin.hasPlayServices();
       const res = await GoogleSignin.signIn();
       if (!isSuccessResponse(res)) return; // cancelled
