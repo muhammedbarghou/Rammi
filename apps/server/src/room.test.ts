@@ -15,8 +15,8 @@ process.env.SUPABASE_URL = SUPABASE_URL;
 const { publicKey, privateKey } = await generateKeyPair("ES256");
 setKeys(createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), alg: "ES256" }] }));
 
-const token = (sub: string, key: CryptoKey = privateKey, exp: number | string = "1h") =>
-  new SignJWT({})
+const token = (sub: string, key: CryptoKey = privateKey, exp: number | string = "1h", user_metadata: object = {}) =>
+  new SignJWT({ user_metadata })
     .setProtectedHeader({ alg: "ES256" })
     .setSubject(sub)
     .setIssuer(`${SUPABASE_URL}/auth/v1`)
@@ -118,6 +118,14 @@ describe("parties (F2)", () => {
     expect(r.players.map((p) => p.hand.length)).toEqual([0, 1, 2].map((s) => (s === r.shuffler ? 15 : 14)));
     // R-12: the turn timer is 15 seconds.
     expect(server.deadline - Date.now()).toBeGreaterThan(TURN_SECONDS * 1000 - 1000);
+  });
+
+  it("F1 the view shows each player's name and photo from the social login", async () => {
+    colyseus.sdk.auth.token = await token("u0", privateKey, "1h", { full_name: "Amina", avatar_url: "https://x/a.png" });
+    const room = await colyseus.sdk.create("table", { players: 2 });
+    const views: View[] = [];
+    room.onMessage("view", (v: View) => views.push(v));
+    await vi.waitFor(() => expect(views.at(-1)?.seats[0]).toMatchObject({ name: "Amina", avatar: "https://x/a.png" }));
   });
 
   it("F2 an unknown code cannot be joined", async () => {

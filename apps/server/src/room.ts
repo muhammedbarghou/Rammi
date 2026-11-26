@@ -13,7 +13,7 @@ import {
   type Move,
   type RoundState,
 } from "@rami/rules";
-import { verifyToken } from "./auth";
+import { verifyToken, type Profile } from "./auth";
 import { saveMatch, type MatchResult } from "./save";
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 32 chars, no 0/O or 1/I
@@ -28,7 +28,7 @@ function newCode(): string {
 }
 
 type Options = { players: number; companion?: boolean; target?: number };
-type Seat = { userId: string; client: Client | null };
+type Seat = Profile & { client: Client | null };
 type RoundLog = MatchResult["rounds"][number];
 
 const str = (x: unknown) => typeof x === "string";
@@ -63,7 +63,7 @@ export class TableRoom extends Room {
   static turnMs = TURN_SECONDS * 1000; // R-12
 
   static async onAuth(token: string) {
-    return { userId: await verifyToken(token) };
+    return verifyToken(token);
   }
 
   status: "lobby" | "playing" | "finished" = "lobby";
@@ -96,17 +96,18 @@ export class TableRoom extends Room {
   }
 
   onJoin(client: Client) {
-    const { userId } = client.auth as { userId: string };
+    const profile = client.auth as Profile;
+    const { userId } = profile;
     const seat = this.seats.find((s) => s.userId === userId);
     if (seat) {
       // F5: same account, back in its seat. The turn deadline was never paused.
       const old = seat.client;
-      seat.client = client;
+      Object.assign(seat, profile, { client });
       old?.leave();
     } else if (this.status !== "lobby") {
       throw new Error("this game has already started");
     } else {
-      this.seats.push({ userId, client });
+      this.seats.push({ ...profile, client });
     }
     if (this.status === "lobby" && this.seats.length === this.playerCount) this.startMatch();
     else this.sendViews();
@@ -247,7 +248,7 @@ export class TableRoom extends Room {
       playerCount: this.playerCount,
       companion: this.companion,
       target: this.target,
-      seats: this.seats.map((s) => ({ userId: s.userId, connected: s.client !== null })),
+      seats: this.seats.map((s) => ({ userId: s.userId, name: s.name, avatar: s.avatar, connected: s.client !== null })),
       totals: this.totals,
       winner: this.winner,
       hand: r?.players[seat]?.hand ?? [],
